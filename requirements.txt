@@ -1,0 +1,7 @@
+tensorflow==2.21.0
+matplotlib==3.11.0
+Pillow==12.3.0
+reportlab==4.4.3
+opencv-python==4.11.0.86
+pyserial==3.5
+psutil==6.1.1

@@ -1,0 +1,20 @@
+Biomedical Waste Classifier - Test Evaluation
+==========================================================
+
+Per-class metrics
+----------------------------------------------------------
+Class         Precision     Recall         F1  Specificity   Support
+Yellow           1.0000     1.0000     1.0000       1.0000       205
+Red              1.0000     1.0000     1.0000       1.0000       220
+Blue             0.9756     1.0000     0.9877       0.9949       120
+White            1.0000     0.9817     0.9908       1.0000       164
+
+Overall metrics
+----------------------------------------------------------
+Test loss               0.0463
+Test accuracy / Top-1   0.9958
+Top-2 accuracy          1.0000
+Macro precision         0.9939
+Macro recall            0.9954
+Macro F1                0.9946
+Macro specificity       0.9987
