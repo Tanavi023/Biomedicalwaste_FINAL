@@ -1,6 +1,6 @@
 # Software architecture
 
-The application follows a one-way dependency direction: preprocessing feeds inference; inference produces a prediction object; the decision engine converts that object to a command; the communication layer may transmit only that command. This prevents serial or actuator concerns from being embedded inside the AI model.
+The dashboard owns the serial connection. A background listener reads newline-delimited JSON requests and queues them for a background classification worker. That worker classifies the latest camera frame and sends one correlated response. The Tk event thread applies display updates from a queue.
 
 ```mermaid
 flowchart TD
@@ -21,5 +21,5 @@ flowchart TD
 1. A user supplies an image or starts the webcam.
 2. Inference validates RGB pixels, resizes to 224×224, normalizes, and produces class probabilities.
 3. The dashboard displays the result and writes an audit row.
-4. If—and only if—a serial connection has been explicitly opened, the dashboard maps the label to a command and asks the communication layer to send it.
-5. The controller logs the acknowledgement or connection failure; the model itself never controls a device.
+4. When connected, a background serial listener continuously reads complete JSONL capture requests, independently of camera preview refreshes.
+5. Each valid request triggers one background inference and one newline-terminated success or failure response carrying the supplied object_id.

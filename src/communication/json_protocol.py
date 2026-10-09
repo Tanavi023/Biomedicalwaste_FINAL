@@ -1,21 +1,30 @@
-"""JSONL request/response validation for the hardware link."""
+"""JSONL request/response validation for the Arduino capture protocol."""
 from __future__ import annotations
+
 import json
 import math
 from pathlib import Path
 from typing import Any
 
+from src.decision.mapper import map_prediction
+
 LABELS_PATH = Path(__file__).resolve().parents[2] / "data" / "labels.json"
 MAX_LINE_BYTES = 16384
+
 
 class ProtocolError(ValueError):
     """Malformed or unsupported hardware request."""
 
-def _labels() -> dict[int, str]:
-    return {int(k): str(v).strip().lower() for k, v in json.loads(LABELS_PATH.read_text(encoding="utf-8")).items()}
 
-def parse_request_line(line: str | bytes) -> str:
-    """Parse one JSONL request: {"object_id":"id","action":"classify"}."""
+def _labels() -> dict[int, str]:
+    return {
+        int(key): str(value).strip().lower()
+        for key, value in json.loads(LABELS_PATH.read_text(encoding="utf-8")).items()
+    }
+
+
+def parse_request_line(line: str | bytes) -> int | str:
+    """Validate one {"command":"capture","object_id":...} JSONL request."""
     if isinstance(line, bytes):
         if len(line) > MAX_LINE_BYTES:
             raise ProtocolError("Request line is too large.")
@@ -27,40 +36,103 @@ def parse_request_line(line: str | bytes) -> str:
         raise ProtocolError("Request line is invalid or too large.")
     try:
         request = json.loads(line)
-    except (json.JSONDecodeError, TypeError) as exc:
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
         raise ProtocolError("Request is not valid JSON.") from exc
     if not isinstance(request, dict):
         raise ProtocolError("Request must be a JSON object.")
+    if set(request) != {"command", "object_id"}:
+        raise ProtocolError("Request must contain only command and object_id.")
     object_id = request.get("object_id")
-    if not isinstance(object_id, str) or not object_id.strip() or len(object_id) > 128:
-        raise ProtocolError("object_id must be a non-empty string of at most 128 characters.")
-    if request.get("action", "classify") != "classify":
-        raise ProtocolError("Unsupported action.")
-    return object_id.strip()
+    if isinstance(object_id, bool) or not (
+        isinstance(object_id, int)
+        or (isinstance(object_id, str) and object_id.strip() and len(object_id) <= 128)
+    ):
+        raise ProtocolError("object_id must be an integer or a non-empty string of at most 128 characters.")
+    if request.get("command") != "capture":
+        raise ProtocolError("Unsupported command.")
+    return object_id
 
-def prediction_response(object_id: str, prediction: Any) -> dict[str, object]:
-    """Build a response matching the current four-class model labels."""
+
+def _validated_confidence(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ProtocolError("Prediction confidence is invalid.")
+    try:
+        confidence = float(value)
+    except (OverflowError, ValueError) as exc:
+        raise ProtocolError("Prediction confidence is invalid.") from exc
+    if not math.isfinite(confidence) or not 0 <= confidence <= 1:
+        raise ProtocolError("Prediction confidence is invalid.")
+    return confidence
+
+
+def prediction_response(object_id: int | str, prediction: Any) -> dict[str, object]:
+    """Build the exact Arduino response from a genuine model prediction."""
     labels = _labels()
-    index, label = getattr(prediction, "class_index", None), getattr(prediction, "predicted_class", None)
-    confidence, elapsed = getattr(prediction, "confidence", None), getattr(prediction, "inference_time_ms", None)
+    index = getattr(prediction, "class_index", None)
+    label = getattr(prediction, "predicted_class", None)
+    confidence = _validated_confidence(getattr(prediction, "confidence", None))
     if isinstance(index, bool) or not isinstance(index, int) or labels.get(index) != label:
         raise ProtocolError("Prediction does not match configured model labels.")
-    if label not in {"yellow", "red", "blue", "white"}:
+    if label not in labels.values():
         raise ProtocolError("Prediction label is unsupported.")
-    if not isinstance(confidence, (int, float)) or not math.isfinite(confidence) or not 0 <= confidence <= 1:
-        raise ProtocolError("Prediction confidence is invalid.")
-    if not isinstance(elapsed, (int, float)) or not math.isfinite(elapsed) or elapsed < 0:
-        raise ProtocolError("Prediction time is invalid.")
-    return {"object_id": object_id, "status": "ok", "predicted_class": label,
-            "class_index": index, "confidence": round(float(confidence), 6),
-            "inference_time_ms": round(float(elapsed), 3),
-            "bin": {"yellow": 0, "red": 1, "blue": 2, "white": 3}[label]}
+    try:
+        category = map_prediction(label)
+    except ValueError as exc:
+        raise ProtocolError("Prediction label has no valid waste category.") from exc
+    if category != index:
+        raise ProtocolError("Prediction category does not match its model index.")
+    return {
+        "status": "success",
+        "object_id": object_id,
+        "category": category,
+        "label": label,
+        "confidence": round(confidence, 6),
+    }
 
-def error_response(object_id: str | None, message: str) -> dict[str, object]:
-    safe_id = object_id if isinstance(object_id, str) and object_id.strip() else None
-    return {"object_id": safe_id, "status": "error",
-            "error": str(message).replace("\r", " ").replace("\n", " ")[:200]}
+
+def failed_response(object_id: int | str) -> dict[str, object]:
+    """Return the required failure structure for a valid request ID."""
+    return {
+        "status": "failed",
+        "object_id": object_id,
+        "category": 0,
+        "label": "unknown",
+        "confidence": 0.0,
+    }
+
+
+def validate_response(response: dict[str, object]) -> None:
+    """Reject invalid outbound response shapes, types, and category values."""
+    expected = {"status", "object_id", "category", "label", "confidence"}
+    if not isinstance(response, dict) or set(response) != expected:
+        raise ProtocolError("Response must contain exactly the five protocol fields.")
+    object_id = response["object_id"]
+    if isinstance(object_id, bool) or not (
+        isinstance(object_id, int)
+        or (isinstance(object_id, str) and object_id.strip() and len(object_id) <= 128)
+    ):
+        raise ProtocolError("Response object_id is invalid.")
+    category = response["category"]
+    if isinstance(category, bool) or not isinstance(category, int) or not 0 <= category <= 3:
+        raise ProtocolError("Response category must be an integer from 0 through 3.")
+    confidence = _validated_confidence(response["confidence"])
+    status, label = response["status"], response["label"]
+    if status == "success":
+        labels = _labels()
+        if not isinstance(label, str) or labels.get(category) != label:
+            raise ProtocolError("Successful response label does not match its category.")
+        if map_prediction(label) != category:
+            raise ProtocolError("Successful response category does not match the waste mapper.")
+    elif status == "failed":
+        if category != 0 or label != "unknown" or confidence != 0.0:
+            raise ProtocolError("Failed response must use category 0, unknown, and confidence 0.0.")
+    else:
+        raise ProtocolError("Response status must be success or failed.")
+
 
 def encode_response(response: dict[str, object]) -> bytes:
-    """Encode one compact UTF-8 JSON response, terminated by a newline."""
-    return (json.dumps(response, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
+    """Validate and encode one compact UTF-8 JSON line."""
+    validate_response(response)
+    return (
+        json.dumps(response, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n"
+    ).encode("utf-8")

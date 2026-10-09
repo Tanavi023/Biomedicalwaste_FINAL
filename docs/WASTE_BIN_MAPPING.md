@@ -1,26 +1,36 @@
 # Waste to bin mapping
 
-The final project's MobileNetV2 model has four outputs. Model label order comes from `data/labels.json`; the hardware bin number is the same class index.
+The trained MobileNetV2 model has four outputs, defined in data/labels.json:
 
-| Waste predicted by model | Model label | Hardware bin |
-| --- | --- | ---: |
-| Yellow category | `yellow` | 0 |
-| Red category | `red` | 1 |
-| Blue category | `blue` | 2 |
-| White category | `white` | 3 |
+| Model label | Category | Existing routing |
+| --- | ---: | --- |
+| yellow | 0 | Yellow |
+| red | 1 | Red |
+| blue | 2 | Blue |
+| white | 3 | White |
 
-Glass equipment packaging and metal equipment packaging both route to the blue bin (2). `glass` and `metal` are routing aliases only; neither is a model output or separate bin. The trained classifier returns the actual model label (for these items, `blue`) and its confidence.
+The model does not predict metal or glass. Those names are routing aliases for category 2 in the existing decision mapper. The serial response preserves the model's genuine label, which is blue for the current four-class model.
 
-## JSONL serial protocol
+## Arduino JSONL protocol
 
-Each request is one UTF-8 JSON object terminated by a newline:
+The Arduino sends one UTF-8 JSON object followed by a newline:
 
-```json
-{"object_id":"unique-object-id","action":"classify"}
-```
+    {"command":"capture","object_id":1}
 
-The camera preview does not run inference. A complete valid request triggers one inference from the latest available frame and one JSON response line. The optional action defaults to `classify`. Invalid JSON, unsupported actions, oversized requests, and unavailable camera frames receive a bounded error response. Successful responses include the same `object_id`, the model label, class index, confidence, inference time, and bin number. The response is newline terminated; logs remain outside the serial stream.
+object_id must be an integer or non-empty string. Python preserves its JSON value in the corresponding response. The camera preview does not classify by itself; each valid capture request triggers exactly one classification using the latest available camera frame.
 
-Do not reuse an `object_id`. The dashboard remembers recent IDs and returns an error for duplicates without classifying again. Legacy numeric command methods remain available for callers, but an ACK timeout after a write is ambiguous and the controller will not resend that command.
+Success:
 
-No firmware is included in this repository. Hardware framing, parsing, and actuator behavior require validation on the intended board before deployment.
+    {"status":"success","object_id":1,"category":2,"label":"blue","confidence":0.95}
+
+Failure after a valid request ID was received:
+
+    {"status":"failed","object_id":1,"category":0,"label":"unknown","confidence":0.0}
+
+Every response is one compact UTF-8 JSON line terminated by newline. A valid request receives one response even if no camera frame is available or inference fails. Invalid JSON, missing or invalid IDs, and unsupported commands are logged in the dashboard and receive no response because there is no valid capture request to correlate.
+
+The listener reads complete newline-framed messages in the background while connected. Classification and serial writing also run outside Tk's event thread. Disconnecting or closing the dashboard stops the workers and releases the serial port. No firmware is included, so physical communication remains to be verified on the intended Arduino.
+
+## Hardware capabilities not present in this repository
+
+No fill-level sensor driver, sensor measurements, or Arduino telemetry fields are present, so the dashboard cannot report bin fill percentages. No bin placement angles are documented or configured. Implement these only after receiving actual sensor inputs and approved angle values from the hardware design; this project does not invent either measurement.

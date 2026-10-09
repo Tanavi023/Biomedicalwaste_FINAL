@@ -1,5 +1,4 @@
-"""Durable CSV audit trail for model decisions and hardware outcomes."""
-
+"""Durable CSV audit trail for successful predictions and processing failures."""
 from __future__ import annotations
 
 import csv
@@ -14,24 +13,43 @@ FIELDNAMES = ["Timestamp", "Prediction", "Confidence", "Inference Time (ms)", "C
 
 
 class PredictionLogger:
-    """Append structured prediction events without loading the full log file."""
+    """Append structured prediction and failure events to the existing CSV schema."""
 
     def __init__(self, path: Path = DEFAULT_LOG_PATH) -> None:
         self.path = path
 
-    def log(self, prediction: Prediction, command: int | None, status: str) -> None:
-        """Write one auditable event; ``command`` stays blank when disconnected."""
+    def _append(self, row: dict[str, str | int]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         write_header = not self.path.exists() or self.path.stat().st_size == 0
         with self.path.open("a", newline="", encoding="utf-8") as file:
             writer = csv.DictWriter(file, fieldnames=FIELDNAMES)
             if write_header:
                 writer.writeheader()
-            writer.writerow({
-                "Timestamp": datetime.now(timezone.utc).isoformat(), "Prediction": prediction.predicted_class.title(),
-                "Confidence": f"{prediction.confidence:.6f}", "Inference Time (ms)": f"{prediction.inference_time_ms:.3f}",
-                "Command Sent": "" if command is None else command, "Status": status,
-            })
+            writer.writerow(row)
+
+    def log(self, prediction: Prediction, command: int | None, status: str) -> None:
+        """Write one genuine model prediction."""
+        self._append({
+            "Timestamp": datetime.now(timezone.utc).isoformat(),
+            "Prediction": prediction.predicted_class.title(),
+            "Confidence": f"{prediction.confidence:.6f}",
+            "Inference Time (ms)": f"{prediction.inference_time_ms:.3f}",
+            "Command Sent": "" if command is None else command,
+            "Status": status,
+        })
+
+    def log_failure(self, object_id: int | str | None, message: str) -> None:
+        """Write a failure without inventing a model class or confidence."""
+        safe_id = "unknown" if object_id is None else str(object_id).replace("\r", " ").replace("\n", " ")[:128]
+        detail = " ".join(str(message).replace("\r", " ").replace("\n", " ").split())[:180]
+        self._append({
+            "Timestamp": datetime.now(timezone.utc).isoformat(),
+            "Prediction": "Unknown",
+            "Confidence": "",
+            "Inference Time (ms)": "",
+            "Command Sent": "",
+            "Status": f"failed; object_id={safe_id}; {detail}"[:240],
+        })
 
     def clear(self) -> None:
         """Reset the audit file to its header after user confirmation in the UI."""

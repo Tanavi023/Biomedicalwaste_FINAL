@@ -31,3 +31,5 @@ prediction_logs_export.csv
 results/performance/*.json
 results/testing/*.json
 results/verification/*.json
+.env
+.env.*

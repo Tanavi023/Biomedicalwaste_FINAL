@@ -10,6 +10,18 @@ from src.utils.prediction_logger import PredictionLogger
 
 
 class PredictionLoggerTests(unittest.TestCase):
+    def test_failure_event_is_logged_without_fabricating_prediction_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "events.csv"
+            PredictionLogger(path).log_failure(17, "camera unavailable\ninference skipped")
+            with path.open(encoding="utf-8") as file:
+                row = next(csv.DictReader(file))
+            self.assertEqual(row["Prediction"], "Unknown")
+            self.assertEqual(row["Confidence"], "")
+            self.assertEqual(row["Inference Time (ms)"], "")
+            self.assertIn("object_id=17", row["Status"])
+            self.assertIn("camera unavailable inference skipped", row["Status"])
+
     def test_event_is_written_with_required_fields(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "events.csv"

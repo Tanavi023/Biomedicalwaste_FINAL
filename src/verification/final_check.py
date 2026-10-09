@@ -12,10 +12,12 @@ REPORT_PATH = PROJECT_ROOT / "results" / "verification" / "final_build_report.js
 REQUIRED_PATHS = (
     "data/labels.json", "models/biomedical_waste_mobilenetv2.keras", "src/evaluation/evaluate_model.py",
     "src/inference/predict_image.py", "src/inference/predict_folder.py", "src/inference/webcam.py",
-    "src/decision/mapper.py", "src/communication/serial_controller.py", "src/dashboard/dashboard.py",
+    "src/decision/mapper.py", "src/communication/json_protocol.py", "src/communication/serial_controller.py",
+    "src/communication/request_handler.py", "src/dashboard/dashboard.py",
     "src/optimization/optimize_model.py", "README.md", "requirements.txt", "LICENSE",
 )
-MODULES = ("src.decision.mapper", "src.communication.serial_controller", "src.inference.predict_image", "src.dashboard.dashboard")
+MODULES = ("src.decision.mapper", "src.communication.json_protocol", "src.communication.serial_controller",
+           "src.communication.request_handler", "src.inference.predict_image", "src.dashboard.dashboard")
 
 
 def run_final_check() -> Path:
