@@ -11,6 +11,18 @@ from src.decision.mapper import map_prediction
 LABELS_PATH = Path(__file__).resolve().parents[2] / "data" / "labels.json"
 MAX_LINE_BYTES = 16384
 
+# Hardware protocol labels for Arduino communication.
+# Category 2 = metal is confirmed; categories 0, 1, 3 are pending hardware-team confirmation.
+CONFIRMED_PROTOCOL_CATEGORIES: frozenset[int] = frozenset({2})
+PENDING_PROTOCOL_CATEGORIES: frozenset[int] = frozenset({0, 1, 3})
+
+PROTOCOL_LABELS: dict[int, str] = {
+    0: "yellow",  # Pending hardware-team confirmation
+    1: "red",     # Pending hardware-team confirmation
+    2: "metal",   # Confirmed hardware protocol label
+    3: "white",   # Pending hardware-team confirmation
+}
+
 
 class ProtocolError(ValueError):
     """Malformed or unsupported hardware request."""
@@ -81,11 +93,14 @@ def prediction_response(object_id: int | str, prediction: Any) -> dict[str, obje
         raise ProtocolError("Prediction label has no valid waste category.") from exc
     if category != index:
         raise ProtocolError("Prediction category does not match its model index.")
+    protocol_label = PROTOCOL_LABELS.get(category)
+    if protocol_label is None:
+        raise ProtocolError("Prediction category has no configured protocol label.")
     return {
         "status": "success",
         "object_id": object_id,
         "category": category,
-        "label": label,
+        "label": protocol_label,
         "confidence": round(confidence, 6),
     }
 
@@ -118,8 +133,7 @@ def validate_response(response: dict[str, object]) -> None:
     confidence = _validated_confidence(response["confidence"])
     status, label = response["status"], response["label"]
     if status == "success":
-        labels = _labels()
-        if not isinstance(label, str) or labels.get(category) != label:
+        if not isinstance(label, str) or PROTOCOL_LABELS.get(category) != label:
             raise ProtocolError("Successful response label does not match its category.")
         if map_prediction(label) != category:
             raise ProtocolError("Successful response category does not match the waste mapper.")

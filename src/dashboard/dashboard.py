@@ -12,6 +12,7 @@ from tkinter import messagebox, ttk
 import cv2
 from PIL import Image, ImageTk
 
+from src.communication.json_protocol import ProtocolError, failed_response
 from src.communication.request_handler import handle_capture_line
 from src.communication.serial_controller import SerialController, SerialSettings
 from src.decision.mapper import map_prediction
@@ -192,41 +193,69 @@ class BiomedicalWasteDashboard(tk.Tk):
             if line is None:
                 break
 
-            def current_frame():
-                with self._frame_lock:
-                    return None if self.latest_rgb_frame is None else self.latest_rgb_frame.copy()
-
-            with self._inference_lock:
-                response, prediction, error = handle_capture_line(
-                    line, current_frame, self.predictor
-                )
-            if response is None:
-                self._ui_events.put(("status", f"Hardware request ignored: {error}"))
-                continue
-
-            object_id = response["object_id"]
-            if prediction is not None:
-                category = int(response["category"])
-                try:
-                    self.audit_log.log(prediction, category, f"json_request_classified; object_id={response['object_id']}")
-                except Exception as exc:
-                    self._ui_events.put(("status", f"Prediction log write failed: {exc}"))
-                self._ui_events.put(("prediction", (prediction, category)))
-            else:
-                try:
-                    self.audit_log.log_failure(object_id, error or "Classification failed.")
-                except Exception as exc:
-                    self._ui_events.put(("status", f"Failure log write failed: {exc}"))
-                self._ui_events.put(("status", f"Classification failed for request {object_id}: {error}"))
-
             try:
-                self.serial.send_json_response(response)
-                self._ui_events.put(("serial_exchange_verified", None))
-                self._ui_events.put(("status", f"Processed Arduino request {object_id}."))
-            except ConnectionError as exc:
-                self._ui_events.put(("connection_error", str(exc)))
-                self._listener_stop.set()
-                break
+                def current_frame():
+                    with self._frame_lock:
+                        return None if self.latest_rgb_frame is None else self.latest_rgb_frame.copy()
+
+                with self._inference_lock:
+                    response, prediction, error = handle_capture_line(
+                        line, current_frame, self.predictor
+                    )
+                if response is None:
+                    self._ui_events.put(("status", f"Hardware request ignored: {error}"))
+                    continue
+
+                object_id = response.get("object_id")
+                if prediction is not None:
+                    try:
+                        category = int(response["category"])
+                    except (KeyError, TypeError, ValueError):
+                        category = 0
+                    try:
+                        self.audit_log.log(prediction, category, f"json_request_classified; object_id={object_id}")
+                    except Exception as exc:
+                        self._ui_events.put(("status", f"Prediction log write failed: {exc}"))
+                    self._ui_events.put(("prediction", (prediction, category)))
+                else:
+                    try:
+                        self.audit_log.log_failure(object_id, error or "Classification failed.")
+                    except Exception as exc:
+                        self._ui_events.put(("status", f"Failure log write failed: {exc}"))
+                    self._ui_events.put(("status", f"Classification failed for request {object_id}: {error}"))
+
+                try:
+                    self.serial.send_json_response(response)
+                    self._ui_events.put(("serial_exchange_verified", None))
+                    self._ui_events.put(("status", f"Processed Arduino request {object_id}."))
+                except ProtocolError as exc:
+                    LOGGER.error("Invalid JSON response for request %s: %s", object_id, exc)
+                    self._ui_events.put(("status", f"Invalid response for request {object_id}: {exc}"))
+                    if response.get("status") == "success":
+                        try:
+                            self.audit_log.log_failure(object_id, f"Invalid success response: {exc}")
+                        except Exception as log_exc:
+                            self._ui_events.put(("status", f"Failure log write failed: {log_exc}"))
+                        try:
+                            fallback = failed_response(object_id)
+                            self.serial.send_json_response(fallback)
+                            self._ui_events.put(("serial_exchange_verified", None))
+                            self._ui_events.put(("status", f"Sent failed response for invalid request {object_id}."))
+                        except ConnectionError as conn_exc:
+                            LOGGER.error("Serial connection failed while sending failed response: %s", conn_exc)
+                            self._ui_events.put(("connection_error", str(conn_exc)))
+                            self._listener_stop.set()
+                            break
+                        except ProtocolError as proto_exc:
+                            LOGGER.error("Failed response rejected by protocol for request %s: %s", object_id, proto_exc)
+                except ConnectionError as exc:
+                    LOGGER.error("Serial connection failed: %s", exc)
+                    self._ui_events.put(("connection_error", str(exc)))
+                    self._listener_stop.set()
+                    break
+            except Exception as exc:
+                LOGGER.exception("Unexpected error processing serial request: %s", exc)
+                self._ui_events.put(("status", f"Internal processing error: {exc}"))
 
     def _drain_ui_events(self) -> None:
         try:

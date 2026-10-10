@@ -17,7 +17,7 @@ class RequestHandlerTests(unittest.TestCase):
         )
         self.assertEqual(response, {
             "status": "success", "object_id": 1, "category": 2,
-            "label": "blue", "confidence": 0.95,
+            "label": "metal", "confidence": 0.95,
         })
         self.assertIs(result, prediction)
         self.assertIsNone(error)

@@ -1,4 +1,6 @@
 tensorflow==2.21.0
+numpy==1.26.4
+ml-dtypes==0.5.4
 matplotlib==3.11.0
 Pillow==12.3.0
 reportlab==4.4.3
