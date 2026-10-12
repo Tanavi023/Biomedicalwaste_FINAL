@@ -1,5 +1,5 @@
 tensorflow==2.21.0
-numpy==1.26.4
+numpy==2.2.6
 ml-dtypes==0.5.4
 matplotlib==3.11.0
 Pillow==12.3.0
